@@ -1,0 +1,68 @@
+name: Compilar projeto Minecraft
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  build:
+    name: Compilar
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MC_VERSION: '1.21'
+      PROJECT_TYPE: 'fabric'
+    steps:
+      - name: Obter ficheiros do repositório
+        uses: actions/checkout@v4
+      - name: Instalar Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Preparar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Extrair project.zip
+        run: |
+          unzip -q project.zip -d src_project
+        env:
+          SOURCE_ROOT: "craft-tech-client-main/"
+      - name: Compilar com Gradle ou Maven
+        env:
+          SOURCE_ROOT: "craft-tech-client-main/"
+        run: |
+          ROOT=$(realpath "src_project/$SOURCE_ROOT")
+          BASE=$(realpath src_project)
+          case "$ROOT/" in "$BASE/"*) ;; *) echo "::error::Pasta inválida"; exit 1 ;; esac
+          echo "PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
+          cd "$ROOT"
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew build -x test --no-daemon
+          elif [ -f build.gradle ] || [ -f build.gradle.kts ]; then
+            gradle build -x test --no-daemon
+          elif [ -f pom.xml ]; then
+            mvn -B package -DskipTests
+          else
+            echo "::error::Não foi encontrado build.gradle, build.gradle.kts nem pom.xml"
+            exit 1
+          fi
+      - name: Recolher ficheiros .jar
+        run: |
+          mkdir -p out
+          find "$PROJECT_DIR" -type f -name '*.jar' \( -path '*/build/libs/*' -o -path '*/target/*' \) \
+            | grep -vE '(-sources|-dev|-javadoc|-plain)\.jar$' | grep -v '/original-' \
+            | while read -r f; do cp "$f" out/; done
+          ls -la out
+          ls out/*.jar > /dev/null
+      - name: Publicar artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: jars
+          path: out/*.jar
+      - name: Criar Release com o .jar
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          files: out/*.jar
